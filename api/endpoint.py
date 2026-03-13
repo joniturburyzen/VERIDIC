@@ -116,8 +116,9 @@ def _process_video(video_bytes: bytes) -> dict:
         bs_list.append(bs)
 
     valid = sum(1 for lm in lm_list if lm is not None)
-    if valid < 10:
-        raise ValueError("Rostro no detectado en suficientes frames")
+    min_required = max(20, int(len(frames) * 0.30))
+    if valid < min_required:
+        raise ValueError(f"Rostro detectado en {valid}/{len(frames)} frames (mínimo {min_required}) — regrabar con mejor encuadre")
 
     features = compute_video_features(frames, lm_list, bs_list, fps, audio, audio_sr)
     if features is None:
@@ -138,10 +139,13 @@ def _process_video(video_bytes: bytes) -> dict:
     # Distancia de cada frame respecto a la expresion media
     dists = [float(np.linalg.norm(lm_list[i] - mean_lm)) for i in valid_idx]
 
-    # Frame 1: el mas calmado del primer tercio (baseline)
-    first_third = valid_idx[:max(1, len(valid_idx) // 3)]
-    dists_first = [float(np.linalg.norm(lm_list[i] - mean_lm)) for i in first_third]
-    baseline_idx = first_third[int(np.argmin(dists_first))]
+    # Frame 1: el mas calmado de los primeros 3s reales (zona baseline de calibración)
+    baseline_frames_n = max(1, int(fps * 3))
+    baseline_zone = [i for i in valid_idx if i < baseline_frames_n]
+    if not baseline_zone:  # fallback si el vídeo es muy corto
+        baseline_zone = valid_idx[:max(1, len(valid_idx) // 3)]
+    dists_first = [float(np.linalg.norm(lm_list[i] - mean_lm)) for i in baseline_zone]
+    baseline_idx = baseline_zone[int(np.argmin(dists_first))]
 
     # Frames 2 y 3: maxima desviacion, separados por al menos 10 frames entre si
     ranked = sorted(zip(dists, valid_idx), reverse=True)
@@ -157,6 +161,7 @@ def _process_video(video_bytes: bytes) -> dict:
 
     key_frames = [frames[baseline_idx], frames[expressive[0]], frames[expressive[1]]]
 
+    face_coverage = round(valid / max(len(frames), 1), 3)
     feat_display = {k: round(float(v), 4) for k, v in features.items()}
     feat_display.update(calib_deltas)
 
@@ -166,6 +171,8 @@ def _process_video(video_bytes: bytes) -> dict:
         "_key_frames":     key_frames,
         "_audio":          audio,
         "_audio_sr":       audio_sr,
+        "_calib_deltas":   calib_deltas,
+        "_face_coverage":  face_coverage,
     }
 
 
@@ -193,9 +200,11 @@ async def analyze_video(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error interno: {e}")
 
-    key_frames = result.pop("_key_frames")
-    audio      = result.pop("_audio")
-    audio_sr   = result.pop("_audio_sr")
+    key_frames    = result.pop("_key_frames")
+    audio         = result.pop("_audio")
+    audio_sr      = result.pop("_audio_sr")
+    calib_deltas  = result.pop("_calib_deltas")
+    face_coverage = result.pop("_face_coverage")
 
     _WORKER_TIMEOUT = 40.0   # segundos — timeout por llamada al Worker
 
@@ -242,6 +251,8 @@ async def analyze_video(file: UploadFile = File(...)):
                 transcript_text,
                 visual_analysis,
                 linguistic_analysis or "",
+                calib_deltas,
+                face_coverage,
             ),
             timeout=_WORKER_TIMEOUT,
         )

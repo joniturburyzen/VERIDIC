@@ -79,6 +79,8 @@ def synthesize(
     transcription:       str,
     visual_analysis:     str,
     linguistic_analysis: str,
+    calib_deltas:        dict = None,
+    face_coverage:       float = 1.0,
 ) -> str:
     key_feats  = ['ear_mean','ear_asymmetry','gaze_std','brow_asymmetry','head_yaw_std',
                   'hr_bpm','pitch_mean','pause_ratio','speech_rate']
@@ -103,6 +105,18 @@ def synthesize(
     )
     bio_score = round(min(1.0, xgb_scaled * 0.5 + facs_signal * 0.5) * 100)
 
+    calib_str = ""
+    if calib_deltas:
+        calib_lines = "\n".join(
+            f"  {k}: {'+' if v > 0 else ''}{v:.3f}" for k, v in calib_deltas.items()
+        )
+        calib_str = f"\n\n[D] CALIBRACION INDIVIDUAL (deltas zona analisis vs baseline 3s)\n{calib_lines}"
+
+    coverage_str = ""
+    if face_coverage < 0.90:
+        note = " — baja cobertura: reducir confianza en canal biometrico" if face_coverage < 0.50 else ""
+        coverage_str = f"\n\n[META] Cobertura facial: {int(face_coverage * 100)}% de frames con cara detectada{note}"
+
     user_msg = (
         f"[A] BIOMETRICO\n"
         f"Score biometrico combinado (XGBoost calibrado + FACS): {bio_score}%\n"
@@ -116,6 +130,8 @@ def synthesize(
         f"[C] VISUAL\n"
         f"{visual_analysis or '(no disponible)'}\n\n"
         f"Transcripcion original: {transcription or '(no disponible)'}"
+        + calib_str
+        + coverage_str
     )
 
     resp = _gemini_json({
