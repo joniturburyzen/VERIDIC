@@ -1,0 +1,16 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+data/
+DISEÑO/
+DISEÑO1/
+DISEÑO2/
+DISEÑO3/
+Dockerfile.py
+*.ipynb
+train_model_real.py
+wrangler.toml
+worker.js
+.git/

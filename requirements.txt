@@ -1,0 +1,15 @@
+opencv-python-headless
+mediapipe
+numpy
+scikit-learn
+xgboost
+joblib
+pillow
+fastapi
+uvicorn[standard]
+python-multipart
+librosa
+soundfile
+av
+scipy
+python-dotenv

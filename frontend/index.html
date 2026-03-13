@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>VERIDIC</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="manifest" href="/static/manifest.json">
+  <meta name="theme-color" content="#0a0a0a">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════
+     PANTALLA 1 — CARGA
+══════════════════════════════════════════════════════ -->
+<div id="screenLoading" class="screen screen-loading active">
+  <div class="tac-overlay">
+    <div class="scan-line"></div>
+    <div class="corner tl"></div>
+    <div class="corner tr"></div>
+    <div class="corner bl"></div>
+    <div class="corner br"></div>
+  </div>
+  <div class="grid-bg"></div>
+
+  <main class="loading-main">
+    <!-- Ojo SVG animado -->
+    <div class="eye-wrap">
+      <svg class="eye-svg" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="100" cy="100" fill="none" r="30" stroke="#22c55e" stroke-width="2"/>
+        <circle class="eye-pulse" cx="100" cy="100" fill="#22c55e" r="15"/>
+        <g fill="none" opacity="0.6" stroke="#22c55e" stroke-width="1.5">
+          <circle cx="100" cy="100" r="45" stroke-dasharray="20 10"/>
+          <path d="M100 20 L100 40 M180 100 L160 100 M100 180 L100 160 M20 100 L40 100"/>
+        </g>
+        <g>
+          <path d="M40 100 Q100 40 160 100" fill="none" stroke="#4ade80" stroke-linecap="round" stroke-width="4"/>
+          <path d="M40 100 Q100 160 160 100" fill="none" stroke="#4ade80" stroke-linecap="round" stroke-width="4"/>
+        </g>
+      </svg>
+      <div class="eye-scan-text">Scanning_Sequence_084</div>
+    </div>
+
+    <!-- Título y barra -->
+    <div class="loading-brand">
+      <h1 class="loading-title">VERIDIC</h1>
+      <p class="loading-sub">Biometric Scan In Progress...</p>
+      <div class="progress-wrap">
+        <div class="progress-fill" id="progressBar"></div>
+      </div>
+      <div class="loading-stats">
+        <div>
+          <p>&gt; ANALYZING BIOMETRICS</p>
+          <p>&gt; ENCRYPTING PACKETS</p>
+        </div>
+        <div class="text-right">
+          <p>SYS_VER: 2.0.48-STABLE</p>
+          <p>NOD_LAT: 12ms</p>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+     PANTALLA 2 — CÁMARA PRINCIPAL
+══════════════════════════════════════════════════════ -->
+<div id="screenMain" class="screen screen-main">
+
+  <!-- Top nav -->
+  <nav class="top-nav">
+    <span class="nav-icon">☰</span>
+    <h2 class="nav-title">VERIDIC</h2>
+    <span class="nav-icon">⚙</span>
+  </nav>
+
+  <!-- Área cámara -->
+  <div class="cam-area">
+    <div class="video-inner" id="videoInner">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="meshCanvas" class="mesh-canvas"></canvas>
+    </div>
+
+    <!-- HUD overlay -->
+    <div class="hud-overlay">
+      <!-- Esquinas -->
+      <div class="hud-corner hud-tl"></div>
+      <div class="hud-corner hud-tr"></div>
+      <div class="hud-corner hud-bl"></div>
+      <div class="hud-corner hud-br"></div>
+      <!-- Crosshair -->
+      <div class="crosshair">
+        <div class="crosshair-h"></div>
+        <div class="crosshair-v"></div>
+        <div class="crosshair-dot"></div>
+        <span class="crosshair-label">TARGET_LOCK: ACTIVE</span>
+      </div>
+      <!-- REC indicator -->
+      <div class="rec-indicator">
+        <div id="recDot" class="rec-dot hidden"></div>
+        <span class="rec-text">REC //</span>
+        <span id="countdown" class="rec-timer hidden">15</span>
+      </div>
+    </div>
+
+    <!-- Zoom buttons -->
+    <div class="zoom-btns">
+      <button class="zoom-btn" id="btnZoomIn">+</button>
+      <button class="zoom-btn" id="btnZoomOut">−</button>
+    </div>
+  </div>
+
+  <!-- Panel inferior -->
+  <div class="bottom-panel">
+
+    <!-- Botón hexagonal grabar -->
+    <div class="hex-wrap">
+      <button class="hex-btn" id="btnRecord">
+        <span class="hex-icon">⏺</span>
+        <span class="hex-label">GRABAR</span>
+      </button>
+    </div>
+
+    <!-- Score ring -->
+    <div class="ring-wrap">
+      <svg class="ring-svg" viewBox="0 0 100 100">
+        <circle cx="50" cy="50" r="45" class="ring-bg" fill="transparent"/>
+        <circle id="ringFill" cx="50" cy="50" r="45" class="ring-fill"
+                fill="transparent" stroke-dasharray="0 283"
+                transform="rotate(-90 50 50)"/>
+      </svg>
+      <div class="ring-labels">
+        <span id="scoreLabel" class="ring-pct">--%</span>
+        <span id="verdict" class="ring-verdict">VERACITY INDEX</span>
+      </div>
+    </div>
+
+    <!-- System log terminal -->
+    <div class="syslog" id="sysLog">
+      <div class="syslog-header">
+        <span class="syslog-icon">▶</span>
+        <span class="syslog-title">SYSTEM_LOG</span>
+        <span id="lingBadge" class="ling-badge hidden"></span>
+      </div>
+      <div class="syslog-body" id="sysLogBody">
+        <p class="log-line"><span class="log-key">[INIT]</span> Calibrating sensors... OK</p>
+        <p class="log-line">&gt; Micro-expression detection: ACTIVE</p>
+        <p class="log-line">&gt; Pupil dilation monitor: STABLE</p>
+        <p class="log-line log-cursor">&gt; _</p>
+      </div>
+    </div>
+
+    <!-- Status bar -->
+    <div id="statusBar" class="status-bar idle">
+      <span id="statusText">Listo — pulsa GRABAR para comenzar</span>
+    </div>
+
+    <!-- Live panel señales (oculto, valores se vuelcan al log) -->
+    <div id="livePanel" class="hidden">
+      <div class="live-row">
+        <span>Apertura ocular</span>
+        <div><div id="liveEarBar"></div></div>
+        <span id="liveEarVal">--</span>
+      </div>
+      <div class="live-row">
+        <span>Estab. mirada</span>
+        <div><div id="liveGazeBar"></div></div>
+        <span id="liveGazeVal">--</span>
+      </div>
+      <div class="live-row">
+        <span>Movim. cabeza</span>
+        <div><div id="liveHeadBar"></div></div>
+        <span id="liveHeadVal">--</span>
+      </div>
+    </div>
+
+    <!-- Botón ver detalles (aparece tras análisis) -->
+    <button id="btnDetails" class="btn-details hidden">
+      VER ANÁLISIS COMPLETO →
+    </button>
+
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+     PANTALLA 3 — ANÁLISIS COMPLETO
+══════════════════════════════════════════════════════ -->
+<div id="screenResults" class="screen screen-results">
+
+  <!-- Top nav -->
+  <header class="top-nav results-nav">
+    <button id="btnBack" class="nav-back">←</button>
+    <div class="nav-center">
+      <span class="nav-proto">SYSTEM_PROTOCOL</span>
+      <h1 class="nav-title">VERIDIC</h1>
+    </div>
+    <div class="nav-spacer"></div>
+  </header>
+
+  <!-- Status bar forense -->
+  <div class="forensic-bar">
+    <div class="forensic-live">
+      <span class="forensic-dot"></span>
+      <span>LIVE FORENSIC STREAM: ACTIVE</span>
+    </div>
+    <span class="forensic-sec">SEC_LEVEL: ALPHA-9</span>
+  </div>
+
+  <!-- Terminal principal -->
+  <main class="results-main">
+    <div class="kernel-log">
+      <div class="kernel-header">
+        <div class="kernel-title-wrap">
+          <span class="kernel-icon">▶</span>
+          <span class="kernel-title">KERNEL_LOG_OUTPUT.TXT</span>
+        </div>
+        <div class="kernel-dots">
+          <div class="kdot"></div>
+          <div class="kdot"></div>
+        </div>
+      </div>
+      <div class="kernel-body" id="kernelBody">
+        <div class="log-entry">
+          <span class="log-ts">--:--:--</span>
+          <p class="log-cursor">&gt; _</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Veredicto card -->
+    <div id="verdictCard" class="verdict-card hidden">
+      <pre id="verdictText" class="verdict-text"></pre>
+    </div>
+
+    <!-- Paneles ocultos (datos para el kernel log) -->
+    <div id="analysisPanels" class="hidden">
+      <div id="panelTranscript"><p id="transcriptionText"></p></div>
+      <div id="panelVisual"><p id="visualText"></p></div>
+      <div id="panelLinguistic"><p id="linguisticText"></p></div>
+    </div>
+    <div id="results" class="hidden">
+      <details class="feat-details">
+        <summary>Features biométricas</summary>
+        <div class="feature-grid" id="featureGrid"></div>
+      </details>
+    </div>
+  </main>
+
+  <!-- Footer stats -->
+  <footer class="results-footer">
+    <div class="foot-stat">
+      <p class="foot-label">ENC_TYPE</p>
+      <p class="foot-val">AES-512</p>
+    </div>
+    <div class="foot-stat">
+      <p class="foot-label">NODE_SYNC</p>
+      <p class="foot-val">STABLE</p>
+    </div>
+    <div class="foot-stat">
+      <p class="foot-label">TRAFFIC</p>
+      <p class="foot-val" id="footTraffic">--- Kb/s</p>
+    </div>
+  </footer>
+
+</div>
+
+<script src="/static/app.js" type="module"></script>
+</body>
+</html>
