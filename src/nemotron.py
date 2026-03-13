@@ -4,8 +4,10 @@
 
 import os, json, re
 import urllib.request, urllib.error
+import concurrent.futures
 
 _GOOGLE_KEY = os.environ.get("GOOGLE_AI_API_KEY", "")
+_GROQ_KEY   = os.environ.get("GROQ_KEY", "")
 
 _SYNTHESIS_SYS = (
     "Eres un analista forense multimodal. Integras tres canales de evidencia "
@@ -57,6 +59,22 @@ _SYNTHESIS_SYS = (
     "  - Solo AUTENTICO con bio bajo Y linguistico BAJO → PUNTUACION puede ser <35"
 )
 
+_FISCAL_SYS = (
+    "Eres un fiscal forense. Tu unico rol es argumentar POR QUE la persona en el reporte "
+    "puede estar mintiendo. No eres objetivo: extrae y presenta las señales de engano mas "
+    "relevantes de la evidencia disponible. Cita datos concretos (scores, features, frases). "
+    "Formato obligatorio: hasta 4 puntos numerados en espanol, sin asteriscos, 1-2 frases cada uno. "
+    "Si los datos son genuinamente insuficientes escribe solo: SIN SEÑALES CLARAS DE ENGANO."
+)
+
+_DEFENSA_SYS = (
+    "Eres un defensor forense. Tu unico rol es argumentar POR QUE la persona en el reporte "
+    "puede estar siendo honesta. No eres objetivo: encuentra explicaciones inocentes para "
+    "las señales detectadas y señala la ausencia de indicadores fiables. Cita datos concretos. "
+    "Formato obligatorio: hasta 4 puntos numerados en espanol, sin asteriscos, 1-2 frases cada uno. "
+    "Si no hay señales que defender escribe solo: DECLARACION COHERENTE SIN ALERTAS."
+)
+
 
 def _gemini_json(payload: dict) -> dict:
     url  = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={_GOOGLE_KEY}"
@@ -71,6 +89,28 @@ def _gemini_json(payload: dict) -> dict:
     except Exception as e:
         print(f"[nemotron] error: {e}")
         return {}
+
+
+def _groq_text(system: str, user: str, max_tokens: int = 700) -> str:
+    """Llamada de texto a Groq llama-3.3-70b. Devuelve string vacío si GROQ_KEY no está."""
+    if not _GROQ_KEY:
+        return ""
+    data = json.dumps({"model": "llama-3.3-70b-versatile", "messages": [
+        {"role": "system", "content": system},
+        {"role": "user",   "content": user},
+    ], "max_tokens": max_tokens, "temperature": 0.3}).encode()
+    req = urllib.request.Request(
+        "https://api.groq.com/openai/v1/chat/completions", data=data,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {_GROQ_KEY}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            d = json.loads(r.read())
+            return (d.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
+    except Exception as e:
+        print(f"[groq-text] error: {e}")
+        return ""
 
 
 def synthesize(
@@ -105,6 +145,26 @@ def synthesize(
     )
     bio_score = round(min(1.0, xgb_scaled * 0.5 + facs_signal * 0.5) * 100)
 
+    # ── Adversarial: fiscal y defensa en paralelo (Groq) ─────────────────────
+    evidence_brief = (
+        f"Bio combinado: {bio_score}% | Riesgo linguistico: {ling_risk or 'no determinado'}\n"
+        f"Features: {feat_summary}\n"
+        + (f"FACS: {facs_summary}\n" if facs_summary else "")
+        + f"Analisis visual: {visual_analysis or '(no disponible)'}\n"
+        f"Analisis linguistico: {linguistic_analysis or '(no disponible)'}\n"
+        f"Transcripcion: {transcription or '(no disponible)'}"
+    )
+    fiscal_arg = defensa_arg = ""
+    if _GROQ_KEY:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+            f_f = ex.submit(_groq_text, _FISCAL_SYS,  evidence_brief, 250)
+            f_d = ex.submit(_groq_text, _DEFENSA_SYS, evidence_brief, 250)
+            try:
+                fiscal_arg  = f_f.result(timeout=28)
+                defensa_arg = f_d.result(timeout=28)
+            except Exception as e:
+                print(f"[adversarial] timeout/error: {e}")
+
     calib_str = ""
     if calib_deltas:
         calib_lines = "\n".join(
@@ -132,6 +192,14 @@ def synthesize(
         f"Transcripcion original: {transcription or '(no disponible)'}"
         + calib_str
         + coverage_str
+        + (
+            "\n\n[E] ARGUMENTOS FISCAL (señales de engaño identificadas)\n"
+            + (fiscal_arg or "SIN SEÑALES CLARAS DE ENGANO")
+            + "\n\n[F] ARGUMENTOS DEFENSA (explicaciones inocentes)\n"
+            + (defensa_arg or "DECLARACION COHERENTE SIN ALERTAS")
+            + "\n\nPondera estos argumentos adversariales junto con tu analisis independiente."
+            if fiscal_arg or defensa_arg else ""
+        )
     )
 
     resp = _gemini_json({
@@ -144,4 +212,7 @@ def synthesize(
         text = resp["candidates"][0]["content"]["parts"][0]["text"].strip()
     except Exception:
         pass
+    if not text:
+        print("[synthesize] Gemini vacío, intentando Groq...")
+        text = _groq_text(_SYNTHESIS_SYS, user_msg, max_tokens=700)
     return text

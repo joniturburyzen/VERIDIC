@@ -1,8 +1,8 @@
 # src/groq_analysis.py
-# Llama directamente a Google AI (Gemini) API.
-# Requiere secreto: GOOGLE_AI_API_KEY
+# Canal primario: Google AI (Gemini). Fallback: Groq.
+# Secretos: GOOGLE_AI_API_KEY (primario), GROQ_KEY (fallback, opcional)
 
-import os, io, json, base64
+import os, io, json, base64, uuid
 import urllib.request, urllib.error
 
 import cv2
@@ -10,6 +10,7 @@ import numpy as np
 import soundfile as sf
 
 _GOOGLE_KEY = os.environ.get("GOOGLE_AI_API_KEY", "")
+_GROQ_KEY   = os.environ.get("GROQ_KEY", "")
 
 
 # ── HTTP helpers ──────────────────────────────────────────────────────────────
@@ -27,6 +28,60 @@ def _gemini_json(payload: dict) -> dict:
     except Exception as e:
         print(f"[gemini] error: {e}")
         return {}
+
+
+def _groq_text(system: str, user: str, model: str = "llama-3.3-70b-versatile",
+               max_tokens: int = 500, temperature: float = 0.2) -> str:
+    """Llamada de texto a Groq. Devuelve string vacío si GROQ_KEY no está configurada."""
+    if not _GROQ_KEY:
+        return ""
+    data = json.dumps({"model": model, "messages": [
+        {"role": "system", "content": system},
+        {"role": "user",   "content": user},
+    ], "max_tokens": max_tokens, "temperature": temperature}).encode()
+    req = urllib.request.Request(
+        "https://api.groq.com/openai/v1/chat/completions", data=data,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {_GROQ_KEY}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            d = json.loads(r.read())
+            return (d.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
+    except urllib.error.HTTPError as e:
+        print(f"[groq-text] HTTP {e.code}: {e.read().decode(errors='replace')[:200]}")
+        return ""
+    except Exception as e:
+        print(f"[groq-text] error: {e}")
+        return ""
+
+
+def _groq_multipart_audio(wav_bytes: bytes) -> str:
+    """Transcripción de audio via Groq Whisper. Devuelve texto o string vacío."""
+    if not _GROQ_KEY:
+        return ""
+    boundary = uuid.uuid4().hex
+    body = (
+        f'--{boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\nwhisper-large-v3\r\n'
+        f'--{boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\njson\r\n'
+        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.wav"\r\n'
+        f'Content-Type: audio/wav\r\n\r\n'
+    ).encode() + wav_bytes + f"\r\n--{boundary}--\r\n".encode()
+    req = urllib.request.Request(
+        "https://api.groq.com/openai/v1/audio/transcriptions", data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}",
+                 "Authorization": f"Bearer {_GROQ_KEY}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.loads(r.read()).get("text", "").strip()
+    except urllib.error.HTTPError as e:
+        print(f"[groq-whisper] HTTP {e.code}: {e.read().decode(errors='replace')[:200]}")
+        return ""
+    except Exception as e:
+        print(f"[groq-whisper] error: {e}")
+        return ""
 
 
 # ── helpers de conversion ─────────────────────────────────────────────────────
@@ -62,6 +117,9 @@ def transcribe_audio(audio: np.ndarray, sr: int) -> dict:
     except Exception:
         pass
     if not text:
+        print("[transcribe] Gemini vacío, intentando Groq Whisper...")
+        text = _groq_multipart_audio(wav)
+    if not text:
         return {}
     return {"text": text, "words": []}
 
@@ -96,7 +154,40 @@ def analyze_key_frames(frames: list, video_bytes: bytes = None) -> str:
         if text:
             return text
 
-    return ""
+    # Fallback: Groq con 3 frames JPEG (sin video completo)
+    if not frames or not _GROQ_KEY:
+        return ""
+    print("[vision] Gemini vacío, intentando Groq con frames JPEG...")
+    labels  = ["expresion neutra (baseline)", "actividad facial maxima 1", "actividad facial maxima 2"]
+    content = []
+    for i, frame in enumerate(frames[:3]):
+        content.append({"type": "text",      "text": f"{labels[i]}:"})
+        content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{_frame_to_b64(frame)}"}})
+    content.append({"type": "text", "text": (
+        "Compara los frames 2 y 3 con el baseline. Busca asimetria facial, tension muscular, "
+        "micro-expresiones, cambios en apertura ocular. "
+        "3-4 frases en espanol sin asteriscos. "
+        "Al final una linea: APARIENCIA: [edad aproximada, cabello, rasgos visibles] "
+        "o APARIENCIA: no determinable."
+    )})
+    data = json.dumps({
+        "model":       "meta-llama/llama-4-scout-17b-16e-instruct",
+        "messages":    [{"role": "user", "content": content}],
+        "max_tokens":  300,
+        "temperature": 0.2,
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.groq.com/openai/v1/chat/completions", data=data,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {_GROQ_KEY}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            d = json.loads(r.read())
+            return (d.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
+    except Exception as e:
+        print(f"[vision-groq] error: {e}")
+        return ""
 
 
 # ── Linguistica ───────────────────────────────────────────────────────────────
@@ -192,4 +283,11 @@ def analyze_linguistics(transcript_text: str, words: list) -> dict:
         text = resp["candidates"][0]["content"]["parts"][0]["text"].strip()
     except Exception:
         pass
+    if not text:
+        print("[linguistics] Gemini vacío, intentando Groq...")
+        text = _groq_text(
+            system=_LING_SYS,
+            user=f"METRICAS:\n{context}\nTRANSCRIPCION:\n{transcript_text}",
+            max_tokens=500, temperature=0.2,
+        )
     return {"text": text, "filler_count": fillers["count"], "filler_rate": fillers["rate"]}
