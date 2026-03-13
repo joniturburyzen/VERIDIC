@@ -9,13 +9,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          lfs: true
 
-      - name: Push to HuggingFace Space
+      - name: Install huggingface_hub
+        run: pip install huggingface_hub
+
+      - name: Upload to HuggingFace Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git remote add hf https://turboryzen:$HF_TOKEN@huggingface.co/spaces/turboryzen/VERIDIC
-          git push hf main --force
+          python3 -c "
+          from huggingface_hub import HfApi
+          import os
+          api = HfApi()
+          api.upload_folder(
+              folder_path='.',
+              repo_id='turboryzen/VERIDIC',
+              repo_type='space',
+              token=os.environ['HF_TOKEN'],
+              ignore_patterns=['.git', '__pycache__', '*.pyc', '.github']
+          )
+          print('Done!')
+          "
