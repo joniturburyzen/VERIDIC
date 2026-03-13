@@ -1,11 +1,11 @@
 # src/nemotron.py
-# Sintesis final via Llama 3.3 70B (Groq) — llamada directa.
-# Requiere secreto: GROQ_KEY
+# Sintesis final via Gemini 2.5 Flash (Google AI) — llamada directa.
+# Requiere secreto: GOOGLE_AI_API_KEY
 
 import os, json, re
 import urllib.request, urllib.error
 
-_GROQ_KEY = os.environ.get("GROQ_KEY", "")
+_GOOGLE_KEY = os.environ.get("GOOGLE_AI_API_KEY", "")
 
 _SYNTHESIS_SYS = (
     "Eres un analista forense multimodal. Integras tres canales de evidencia "
@@ -58,6 +58,21 @@ _SYNTHESIS_SYS = (
 )
 
 
+def _gemini_json(payload: dict) -> dict:
+    url  = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={_GOOGLE_KEY}"
+    data = json.dumps(payload).encode()
+    req  = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=90) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        print(f"[nemotron] HTTP {e.code}: {e.read().decode(errors='replace')[:300]}")
+        return {}
+    except Exception as e:
+        print(f"[nemotron] error: {e}")
+        return {}
+
+
 def synthesize(
     score:               float,
     features:            dict,
@@ -103,31 +118,14 @@ def synthesize(
         f"Transcripcion original: {transcription or '(no disponible)'}"
     )
 
-    data = json.dumps({
-        "model":       "llama-3.3-70b-versatile",
-        "messages":    [
-            {"role": "system", "content": _SYNTHESIS_SYS},
-            {"role": "user",   "content": user_msg},
-        ],
-        "max_tokens":  700,
-        "temperature": 0.3,
-    }).encode()
-    req = urllib.request.Request(
-        "https://api.groq.com/openai/v1/chat/completions",
-        data=data,
-        headers={
-            "Content-Type":  "application/json",
-            "Authorization": f"Bearer {_GROQ_KEY}",
-        },
-        method="POST",
-    )
+    resp = _gemini_json({
+        "systemInstruction": {"parts": [{"text": _SYNTHESIS_SYS}]},
+        "contents": [{"role": "user", "parts": [{"text": user_msg}]}],
+        "generationConfig": {"maxOutputTokens": 700, "temperature": 0.3},
+    })
+    text = ""
     try:
-        with urllib.request.urlopen(req, timeout=90) as r:
-            d = json.loads(r.read())
-            return (d.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
-    except urllib.error.HTTPError as e:
-        print(f"[nemotron] HTTP {e.code}: {e.read().decode(errors='replace')[:300]}")
-        return ""
-    except Exception as e:
-        print(f"[nemotron] error: {e}")
-        return ""
+        text = resp["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except Exception:
+        pass
+    return text

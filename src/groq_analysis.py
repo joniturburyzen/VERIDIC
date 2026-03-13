@@ -1,64 +1,18 @@
 # src/groq_analysis.py
-# Llama directamente a Groq API y Google AI API.
-# Requiere secretos: GROQ_KEY, GOOGLE_AI_API_KEY
+# Llama directamente a Google AI (Gemini) API.
+# Requiere secreto: GOOGLE_AI_API_KEY
 
-import os, io, json, base64, uuid
+import os, io, json, base64
 import urllib.request, urllib.error
 
 import cv2
 import numpy as np
 import soundfile as sf
 
-_GROQ_KEY   = os.environ.get("GROQ_KEY", "")
 _GOOGLE_KEY = os.environ.get("GOOGLE_AI_API_KEY", "")
 
 
 # ── HTTP helpers ──────────────────────────────────────────────────────────────
-
-def _groq_json(path: str, payload: dict) -> dict:
-    url  = f"https://api.groq.com{path}"
-    data = json.dumps(payload).encode()
-    req  = urllib.request.Request(url, data=data, headers={
-        "Content-Type":  "application/json",
-        "Authorization": f"Bearer {_GROQ_KEY}",
-    }, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            return json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        print(f"[groq] {path} HTTP {e.code}: {e.read().decode(errors='replace')[:300]}")
-        return {}
-    except Exception as e:
-        print(f"[groq] {path} error: {e}")
-        return {}
-
-
-def _groq_multipart(path: str, fields: list, files: list) -> dict:
-    """POST multipart/form-data a Groq sin dependencias externas."""
-    boundary = uuid.uuid4().hex
-    body = b""
-    for name, value in fields:
-        body += (f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n').encode()
-    for name, filename, ctype, data in files:
-        body += (f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; filename="{filename}"\r\nContent-Type: {ctype}\r\n\r\n').encode()
-        body += data + b"\r\n"
-    body += f"--{boundary}--\r\n".encode()
-
-    url = f"https://api.groq.com{path}"
-    req = urllib.request.Request(url, data=body, headers={
-        "Content-Type":  f"multipart/form-data; boundary={boundary}",
-        "Authorization": f"Bearer {_GROQ_KEY}",
-    }, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            return json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        print(f"[groq-mp] {path} HTTP {e.code}: {e.read().decode(errors='replace')[:300]}")
-        return {}
-    except Exception as e:
-        print(f"[groq-mp] {path} error: {e}")
-        return {}
-
 
 def _gemini_json(payload: dict) -> dict:
     url  = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={_GOOGLE_KEY}"
@@ -93,30 +47,30 @@ def _frame_to_b64(frame: np.ndarray, quality: int = 72) -> str:
 def transcribe_audio(audio: np.ndarray, sr: int) -> dict:
     if audio is None or len(audio) < sr * 1.0:
         return {}
-    wav = _audio_to_wav_bytes(audio, sr)
-    d   = _groq_multipart(
-        "/openai/v1/audio/transcriptions",
-        fields=[
-            ("model",                     "whisper-large-v3"),
-            ("response_format",           "verbose_json"),
-            ("timestamp_granularities[]", "word"),
-        ],
-        files=[("file", "audio.wav", "audio/wav", wav)],
-    )
-    if not d:
+    wav   = _audio_to_wav_bytes(audio, sr)
+    wav64 = base64.b64encode(wav).decode()
+    resp  = _gemini_json({
+        "contents": [{"parts": [
+            {"inline_data": {"mime_type": "audio/wav", "data": wav64}},
+            {"text": "Transcribe este audio con precision. Devuelve unicamente el texto transcrito, sin explicaciones ni formato adicional."},
+        ]}],
+        "generationConfig": {"maxOutputTokens": 1000, "temperature": 0.0},
+    })
+    text = ""
+    try:
+        text = resp["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except Exception:
+        pass
+    if not text:
         return {}
-    return {
-        "text":  d.get("text", ""),
-        "words": [{"word": w["word"], "start": w["start"], "end": w["end"]}
-                  for w in d.get("words", [])],
-    }
+    return {"text": text, "words": []}
 
 
 def analyze_key_frames(frames: list, video_bytes: bytes = None) -> str:
     if not frames and not video_bytes:
         return ""
 
-    # Prioridad: Gemini 2.5 Flash con video completo
+    # Gemini 2.5 Flash con video completo
     if video_bytes and _GOOGLE_KEY:
         video_b64 = base64.b64encode(video_bytes).decode()
         resp = _gemini_json({
@@ -142,33 +96,7 @@ def analyze_key_frames(frames: list, video_bytes: bytes = None) -> str:
         if text:
             return text
 
-    # Fallback: Llama 4 Scout Vision con 3 frames
-    if not frames:
-        return ""
-
-    labels  = ["Frame baseline (expresion neutra)", "Frame maxima actividad facial 1", "Frame maxima actividad facial 2"]
-    content = []
-    for i, frame in enumerate(frames[:3]):
-        content.append({"type": "text", "text": f"**{labels[i]}:**"})
-        content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{_frame_to_b64(frame)}"}})
-    content.append({"type": "text", "text": (
-        "El primer frame es la expresion neutra de referencia. "
-        "Los frames 2 y 3 son los momentos de mayor actividad facial detectada. "
-        "Compara los frames 2 y 3 con el baseline: busca asimetria facial, "
-        "tension muscular (cejas, mandibula, boca), cambios en apertura ocular, "
-        "micro-expresiones fugaces, diferencias entre lado izquierdo y derecho. "
-        "Responde en 3-4 frases concisas en espanol sin asteriscos. "
-        "Al final añade exactamente una linea con el formato: "
-        "APARIENCIA: [edad aproximada, cabello, rasgos fisicos evidentes]. "
-        "Si no puedes determinarlo con certeza escribe: APARIENCIA: no determinable."
-    )})
-
-    d = _groq_json("/openai/v1/chat/completions", {
-        "model":      "meta-llama/llama-4-scout-17b-16e-instruct",
-        "messages":   [{"role": "user", "content": content}],
-        "max_tokens": 300,
-    })
-    return (d.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
+    return ""
 
 
 # ── Linguistica ───────────────────────────────────────────────────────────────
@@ -254,14 +182,14 @@ def analyze_linguistics(transcript_text: str, words: list) -> dict:
         + (f"Pausas >0.8s: {' | '.join(pauses[:8])}\n" if pauses else "")
     )
 
-    d = _groq_json("/openai/v1/chat/completions", {
-        "model":       "llama-3.3-70b-versatile",
-        "messages":    [
-            {"role": "system", "content": _LING_SYS},
-            {"role": "user",   "content": f"METRICAS:\n{context}\nTRANSCRIPCION:\n{transcript_text}"},
-        ],
-        "max_tokens":  500,
-        "temperature": 0.2,
+    resp = _gemini_json({
+        "systemInstruction": {"parts": [{"text": _LING_SYS}]},
+        "contents": [{"role": "user", "parts": [{"text": f"METRICAS:\n{context}\nTRANSCRIPCION:\n{transcript_text}"}]}],
+        "generationConfig": {"maxOutputTokens": 500, "temperature": 0.2},
     })
-    text = (d.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
+    text = ""
+    try:
+        text = resp["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except Exception:
+        pass
     return {"text": text, "filler_count": fillers["count"], "filler_rate": fillers["rate"]}

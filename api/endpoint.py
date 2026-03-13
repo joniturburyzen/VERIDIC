@@ -197,7 +197,7 @@ async def analyze_video(file: UploadFile = File(...)):
     audio      = result.pop("_audio")
     audio_sr   = result.pop("_audio_sr")
 
-    _WORKER_TIMEOUT = 20.0   # segundos — timeout por llamada al Worker
+    _WORKER_TIMEOUT = 40.0   # segundos — timeout por llamada al Worker
 
     # ── Fase 2: Whisper + Vision en paralelo (I/O-bound via Worker) ────────
     t_task = loop.run_in_executor(None, transcribe_audio,   audio, audio_sr)

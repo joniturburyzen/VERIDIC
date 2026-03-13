@@ -200,7 +200,7 @@ body {
 .cam-area {
   position: relative;
   width: 100%;
-  flex: 0 0 min(260px, 40vh);
+  flex: 0 0 50vh;
   background: #000;
   overflow: hidden;
 }

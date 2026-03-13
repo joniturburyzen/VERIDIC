@@ -535,11 +535,12 @@ async function initFaceMesh() {
     // coordenadas normalizadas de MediaPipe mapeen directamente (sin DPR).
     // CSS width/height:100% se encarga de escalar al tamaño visual.
     function syncCanvas() {
-      const vw = video.videoWidth  || video.clientWidth;
-      const vh = video.videoHeight || video.clientHeight;
-      if (meshCanvas.width !== vw || meshCanvas.height !== vh) {
-        meshCanvas.width  = vw;
-        meshCanvas.height = vh;
+      const dpr = window.devicePixelRatio || 1;
+      const cw  = Math.round(meshCanvas.clientWidth  * dpr);
+      const ch  = Math.round(meshCanvas.clientHeight * dpr);
+      if (meshCanvas.width !== cw || meshCanvas.height !== ch) {
+        meshCanvas.width  = cw;
+        meshCanvas.height = ch;
       }
     }
 
@@ -550,8 +551,17 @@ async function initFaceMesh() {
       lastTs = video.currentTime;
       syncCanvas();
 
-      const W = meshCanvas.width;
-      const H = meshCanvas.height;
+      const W  = meshCanvas.width;
+      const H  = meshCanvas.height;
+      // Calcula el mismo crop que object-fit:cover aplica al video
+      const vw = video.videoWidth  || W;
+      const vh = video.videoHeight || H;
+      const cvScale = Math.max(W / vw, H / vh);
+      const ox = (W - vw * cvScale) / 2;
+      const oy = (H - vh * cvScale) / 2;
+      const lx = x => x * vw * cvScale + ox;
+      const ly = y => y * vh * cvScale + oy;
+
       const result = landmarker.detectForVideo(video, performance.now());
       ctx.clearRect(0, 0, W, H);
 
@@ -594,8 +604,8 @@ async function initFaceMesh() {
       const wellCentered = Math.abs(faceCX - 0.5) < 0.15 && Math.abs(faceCY - 0.49) < 0.15;
       const goodSize     = faceH > 0.18;
       const meshColor    = (wellCentered && goodSize)
-        ? 'rgba(34, 211, 238, 0.70)'    // cyan: bien posicionado
-        : 'rgba(245, 158, 11, 0.80)';   // ámbar: ajusta posición
+        ? 'rgba(34, 211, 238, 0.95)'    // cyan: bien posicionado
+        : 'rgba(245, 158, 11, 0.95)';   // ámbar: ajusta posición
 
       // ── Métricas en vivo ──────────────────────────────────────────────────
       const recording = mediaRecorder?.state === 'recording';
@@ -607,7 +617,7 @@ async function initFaceMesh() {
       for (let i = 0; i < lm.length; i++) {
         if (recording && (EYES_IDX.has(i) || IRIS_IDX.has(i))) continue;
         ctx.beginPath();
-        ctx.arc(lm[i].x * W, lm[i].y * H, 1.6, 0, Math.PI * 2);
+        ctx.arc(lx(lm[i].x), ly(lm[i].y), 2.0, 0, Math.PI * 2);
         ctx.fill();
       }
 
@@ -629,14 +639,14 @@ async function initFaceMesh() {
         ctx.fillStyle = eyeAnomaly ? 'rgba(239, 68, 68, 0.90)' : meshColor;
         for (const i of EYES_IDX) {
           ctx.beginPath();
-          ctx.arc(lm[i].x * W, lm[i].y * H, 2.0, 0, Math.PI * 2);
+          ctx.arc(lx(lm[i].x), ly(lm[i].y), 2.5, 0, Math.PI * 2);
           ctx.fill();
         }
         // Iris
         ctx.fillStyle = gazeAnomaly ? 'rgba(251, 146, 60, 0.95)' : meshColor;
         for (const i of IRIS_IDX) {
           ctx.beginPath();
-          ctx.arc(lm[i].x * W, lm[i].y * H, 2.2, 0, Math.PI * 2);
+          ctx.arc(lx(lm[i].x), ly(lm[i].y), 2.6, 0, Math.PI * 2);
           ctx.fill();
         }
       } else {
@@ -644,12 +654,12 @@ async function initFaceMesh() {
         ctx.fillStyle = meshColor;
         for (const i of EYES_IDX) {
           ctx.beginPath();
-          ctx.arc(lm[i].x * W, lm[i].y * H, 1.6, 0, Math.PI * 2);
+          ctx.arc(lx(lm[i].x), ly(lm[i].y), 1.6, 0, Math.PI * 2);
           ctx.fill();
         }
         for (const i of IRIS_IDX) {
           ctx.beginPath();
-          ctx.arc(lm[i].x * W, lm[i].y * H, 1.6, 0, Math.PI * 2);
+          ctx.arc(lx(lm[i].x), ly(lm[i].y), 1.6, 0, Math.PI * 2);
           ctx.fill();
         }
       }
