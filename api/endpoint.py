@@ -5,7 +5,6 @@ from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from PIL import Image
 import cv2
 
 from src.face_capture    import get_landmarks
@@ -185,12 +184,12 @@ async def analyze_video(file: UploadFile = File(...)):
     Recibe un video corto (WebM/MP4) con audio.
     Pipeline:
       - Sincrono: MediaPipe + XGBoost  (executor)
-      - Paralelo: Whisper + Vision     (Worker → Groq)
-      - Secuencial: Linguistico        (Worker → Groq, necesita transcripcion)
-      - Secuencial: Sintesis final     (Worker → Nemotron)
+      - Paralelo: Transcripcion + Vision (Gemini, fallback Groq)
+      - Secuencial: Linguistico          (Gemini, fallback Groq)
+      - Secuencial: Sintesis final       (Gemini + adversarial Groq)
     """
     video_bytes = await file.read()
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     # ── Fase 1: pipeline CV + XGBoost ──────────────────────────────────────
     try:
@@ -206,9 +205,10 @@ async def analyze_video(file: UploadFile = File(...)):
     calib_deltas  = result.pop("_calib_deltas")
     face_coverage = result.pop("_face_coverage")
 
-    _WORKER_TIMEOUT = 40.0   # segundos — timeout por llamada al Worker
+    _WORKER_TIMEOUT = 40.0   # fases 2 y 3: transcripcion, vision, linguistica
+    _SYNTH_TIMEOUT  = 60.0   # fase 4: adversarial (~20s) + sintesis Gemini (~40s)
 
-    # ── Fase 2: Whisper + Vision en paralelo (I/O-bound via Worker) ────────
+    # ── Fase 2: Transcripcion + Vision en paralelo (Gemini, fallback Groq) ─
     t_task = loop.run_in_executor(None, transcribe_audio,   audio, audio_sr)
     v_task = loop.run_in_executor(None, analyze_key_frames, key_frames, video_bytes)
 
@@ -254,7 +254,7 @@ async def analyze_video(file: UploadFile = File(...)):
                 calib_deltas,
                 face_coverage,
             ),
-            timeout=_WORKER_TIMEOUT,
+            timeout=_SYNTH_TIMEOUT,
         )
     except Exception:
         verdict = ""

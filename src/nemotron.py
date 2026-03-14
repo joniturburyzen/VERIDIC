@@ -105,7 +105,7 @@ def _groq_text(system: str, user: str, max_tokens: int = 700) -> str:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=20) as r:
             d = json.loads(r.read())
             return (d.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
     except Exception as e:
@@ -160,10 +160,13 @@ def synthesize(
             f_f = ex.submit(_groq_text, _FISCAL_SYS,  evidence_brief, 250)
             f_d = ex.submit(_groq_text, _DEFENSA_SYS, evidence_brief, 250)
             try:
-                fiscal_arg  = f_f.result(timeout=28)
-                defensa_arg = f_d.result(timeout=28)
+                fiscal_arg  = f_f.result(timeout=12)
             except Exception as e:
-                print(f"[adversarial] timeout/error: {e}")
+                print(f"[fiscal] timeout/error: {e}")
+            try:
+                defensa_arg = f_d.result(timeout=12)
+            except Exception as e:
+                print(f"[defensa] timeout/error: {e}")
 
     calib_str = ""
     if calib_deltas:
@@ -205,7 +208,7 @@ def synthesize(
     resp = _gemini_json({
         "systemInstruction": {"parts": [{"text": _SYNTHESIS_SYS}]},
         "contents": [{"role": "user", "parts": [{"text": user_msg}]}],
-        "generationConfig": {"maxOutputTokens": 700, "temperature": 0.3},
+        "generationConfig": {"maxOutputTokens": 900, "temperature": 0.3},
     })
     text = ""
     try:
